@@ -1,0 +1,60 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+
+  # --- Evaluation Step ---
+  - name: 'us-central1-docker.pkg.dev/cloud-db-nl2sql/evalbench/eval_server:latest'
+    entrypoint: 'bash'
+    # Decrypts the secret from Secret Manager into the DB_PASSWORD environment variable
+    secretEnv: ['DB_PASSWORD'] 
+    args:
+      - '-c'
+      - |
+        set -e
+        # Workaround for evalbench bug: settings are only applied if path basename matches extension ID
+        ln -s /workspace /workspace/cloud-sql-postgresql
+        cd /evalbench
+
+        export EVAL_GCP_PROJECT_ID=$PROJECT_ID
+        export EVAL_GCP_PROJECT_REGION=us-central1
+        export GOOGLE_CLOUD_PROJECT=$PROJECT_ID
+        export CLOUD_SQL_POSTGRES_PROJECT=$PROJECT_ID
+        export CLOUD_SQL_POSTGRES_INSTANCE=$_CLOUD_SQL_INSTANCE
+        export CLOUD_SQL_POSTGRES_REGION=$_CLOUD_SQL_REGION
+        export CLOUD_SQL_POSTGRES_DATABASE=$_CLOUD_SQL_DATABASE
+        export CLOUD_SQL_POSTGRES_USER=$_CLOUD_SQL_USER
+        export CLOUD_SQL_POSTGRES_IP_TYPE=$_CLOUD_SQL_IP_TYPE
+
+        # Maps the decrypted DB_PASSWORD to the exact variable expected by gemini_cli and extension skills
+        export CLOUD_SQL_POSTGRES_PASSWORD=$$DB_PASSWORD
+
+        # Substitute environment variables in model_config.yaml
+        python3 /workspace/evals/substitute_env.py
+
+        cd /evalbench
+        export PYTHONPATH=./evalbench:./evalbench/evalproto
+        export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
+        echo "Launching Standalone Evaluation..."
+        python3 evalbench/evalbench.py --experiment_config=/workspace/evals/run_config.yaml
+
+
+availableSecrets:
+  secretManager:
+  - versionName: projects/$PROJECT_ID/secrets/daily-ci-evals-db-password/versions/latest
+    env: 'DB_PASSWORD'
